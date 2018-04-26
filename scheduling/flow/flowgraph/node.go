@@ -76,20 +76,20 @@ func (nt NodeType) String() string {
 type Node struct {
 	ID NodeID
 	// The supply of excess flow at this node. 0 for non-source/sink nodes
-	Excess int64
+	Excess int64  // 额外的供给量
 	Type   NodeType
 	// Comment for debugging purposes (used to label special nodes)
 	Comment string
 
 	// The descriptor of the task represented by this node.
-	Task *pb.TaskDescriptor
+	Task *pb.TaskDescriptor  // 该 node 可能代表一个任务节点
 	// TODO(malte): Not sure if these should be here, but they've got to go
 	// somewhere.
 	// The ID of the job that this task belongs to (if task node).
-	JobID types.JobID
+	JobID types.JobID  // 如果该节点为任务节点，其所属的jobid
 
 	// The ID of the resource that this node represents.
-	ResourceID types.ResourceID
+	ResourceID types.ResourceID  // 该节点可能为资源节点
 	// The descriptor of the resource that this node represents.
 	ResourceDescriptor *pb.ResourceDescriptor
 	// the ID of the equivalence class represented by this node.
@@ -97,12 +97,12 @@ type Node struct {
 	EquivClass *types.EquivClass
 
 	// Outgoing arcs from this node, keyed by destination node
-	OutgoingArcMap map[NodeID]*Arc
+	OutgoingArcMap map[NodeID]*Arc // 出去的有向弧线的集合
 	// Incoming arcs to this node, keyed by source node
-	IncomingArcMap map[NodeID]*Arc
+	IncomingArcMap map[NodeID]*Arc // 进入的有向弧线的集合
 	// Field use to mark if the node has been visited in a graph traversal.
 	// TODO: Why is this a uint32 in the original code
-	Visited uint32
+	Visited uint32  // 记录在一次遍历中，是否已经被访问过了
 }
 
 // True indicates that an insert took place,

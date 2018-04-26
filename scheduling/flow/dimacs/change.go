@@ -26,7 +26,7 @@ type Change interface {
 	// GenerateChangeDescription generates a dimacs comment line descriptor for this change
 	GenerateChangeDescription() string
 	// GenerateChange generates dimacs line descriptor for this change
-	GenerateChange() string
+	GenerateChange() string  // 增删node，增改arc
 }
 
 type commentChange struct{ comment string }

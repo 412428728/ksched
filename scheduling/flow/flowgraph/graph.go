@@ -28,11 +28,11 @@ type Graph struct {
 	// Next node id to use
 	nextID NodeID
 	// Unordered set of arcs in graph
-	arcSet map[*Arc]struct{}
+	arcSet map[*Arc]struct{}   // 图中所有的有向弧线的集合
 	// Map of nodes keyed by nodeID
-	nodeMap map[NodeID]*Node
+	nodeMap map[NodeID]*Node  // 图中所有的节点
 	// Queue storing the ids of the nodes we've previously removed.
-	unusedIDs queue.FIFO
+	unusedIDs queue.FIFO // unusedIDs 存未使用的节点？
 
 	// Behaviour flag - set as struct field rather than global static variable
 	//                  since we will have only one instance of the FlowGraph.
@@ -51,7 +51,7 @@ func NewGraph(randomizeNodeIDs bool) *Graph {
 	fg.unusedIDs = queue.NewFIFO()
 	if randomizeNodeIDs {
 		fg.RandomizeNodeIDs = true
-		fg.PopulateUnusedIds(50)
+		fg.PopulateUnusedIds(50) // 创建一个容量为 50 的非排序的节点，nextID为 50
 	}
 	return fg
 }

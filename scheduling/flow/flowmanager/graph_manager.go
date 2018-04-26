@@ -116,7 +116,7 @@ type graphManager struct {
 	// Counter updated whenever we compute topology statistics. The counter is
 	// used as a marker in the resource topology traversal. It helps us to avoid
 	// having to reset the visited state before each traversal.
-	curTraversalCounter uint32
+	curTraversalCounter uint32 // 遍历更新的次数统计
 }
 
 // TaskOrNode used by private methods
@@ -174,26 +174,26 @@ func (gm *graphManager) AddOrUpdateJobNodes(jobs []*pb.JobDescriptor) {
 		//log.Printf("Graph Manager: AddOrUpdateJobNodes: job: %s\n", job.Name)
 		jid := util.MustJobIDFromString(job.Uuid)
 		// First add an unscheduled aggregator node for this job if none exists already.
-		unschedAggNode := gm.jobUnschedToNode[jid]
+		unschedAggNode := gm.jobUnschedToNode[jid] // 该job是否已经有了 unsched 节点
 		if unschedAggNode == nil {
-			unschedAggNode = gm.addUnscheduledAggNode(jid)
+			unschedAggNode = gm.addUnscheduledAggNode(jid) // 给 job 创建相应的 UnSched 节点（每个 job 都有一个 不调度节点）
 		}
 
-		rootTD := job.RootTask
-		rootTaskNode := gm.nodeForTaskID(types.TaskID(rootTD.Uid))
-		if rootTaskNode != nil {
-			nodeQueue.Push(&taskOrNode{Node: rootTaskNode, TaskDesc: rootTD})
-			markedNodes[rootTaskNode.ID] = struct{}{}
+		rootTD := job.RootTask  // 获得 job 的 root task 的 id
+		rootTaskNode := gm.nodeForTaskID(types.TaskID(rootTD.Uid))  // 从 nodeToTask 列表中获得 root task 的相应的 Node
+		if rootTaskNode != nil { // 根任务已经存在
+			nodeQueue.Push(&taskOrNode{Node: rootTaskNode, TaskDesc: rootTD}) // 把 root task 节点压进 nodeQueue
+			markedNodes[rootTaskNode.ID] = struct{}{}  // 把 root task 标记住
 			continue
 		}
-
-		if taskNeedNode(rootTD) {
+		//  如果根任务还没有注册过
+		if taskNeedNode(rootTD) {  // 如果该 root task 需要进行调度
 			//log.Printf("AddOrUpdateJobNode: task:%v needs node\n", rootTD.Name)
-			rootTaskNode = gm.addTaskNode(jid, rootTD)
+			rootTaskNode = gm.addTaskNode(jid, rootTD)  // 创建相应的任务 Node，注册到 nodeToTask 列表，更新 unsched 节点的supply，并且记录图变化
 			// Increment capacity from unsched agg node to sink.
-			gm.updateUnscheduledAggNode(unschedAggNode, 1)
+			gm.updateUnscheduledAggNode(unschedAggNode, 1) // 修改 unsched 节点到sink节点的arc容量，产生事件
 
-			nodeQueue.Push(&taskOrNode{Node: rootTaskNode, TaskDesc: rootTD})
+			nodeQueue.Push(&taskOrNode{Node: rootTaskNode, TaskDesc: rootTD}) // 把新创建的 root task 节点压进 nodeQueue
 			markedNodes[rootTaskNode.ID] = struct{}{}
 		} else {
 			// We don't have to add a new node for the task.
@@ -204,7 +204,7 @@ func (gm *graphManager) AddOrUpdateJobNodes(jobs []*pb.JobDescriptor) {
 		}
 	}
 	// UpdateFlowGraph is responsible for making sure that the node_queue is empty upon completion.
-	gm.updateFlowGraph(nodeQueue, markedNodes)
+	gm.updateFlowGraph(nodeQueue, markedNodes) // 这个时候 nodeQueue 已经压满了 所有的 job 的 root task, 接下来就是一个个取出来然后进行处理
 }
 
 // TODO: do we really need this method? this is just a wrapper around AddOrUpdateJobNodes
@@ -251,12 +251,12 @@ func (gm *graphManager) AddResourceTopology(rtnd *pb.ResourceTopologyNodeDescrip
 }
 
 func (gm *graphManager) NodeBindingToSchedulingDelta(tid, rid flowgraph.NodeID, tb map[types.TaskID]types.ResourceID) *pb.SchedulingDelta {
-	taskNode := gm.cm.Graph().Node(tid)
+	taskNode := gm.cm.Graph().Node(tid) // 获取任务节点
 	if !taskNode.IsTaskNode() {
 		log.Panicf("unexpected non-task node %d\n", tid)
 	}
 	// Destination must be a PU node
-	resNode := gm.cm.Graph().Node(rid)
+	resNode := gm.cm.Graph().Node(rid) // 获取资源节点
 	if resNode.Type != flowgraph.NodeTypePu {
 		log.Panicf("unexpected non-pu node %d\n", rid)
 	}
@@ -264,12 +264,12 @@ func (gm *graphManager) NodeBindingToSchedulingDelta(tid, rid flowgraph.NodeID, 
 	task := taskNode.Task
 	res := resNode.ResourceDescriptor
 
-	// Is the source (task) already placed elsewhere?
+	// Is the source (task) already placed elsewhere?  // 这个任务是否已经被分配给了别的资源？
 	boundRes, ok := tb[types.TaskID(task.Uid)]
-	if !ok {
+	if !ok {  // 没有被分配
 		// Place the task.
 		////log.Printf("flowmanager: place %v on %v", task.Uid, res.Uuid)
-		sd := &pb.SchedulingDelta{
+		sd := &pb.SchedulingDelta{  // 创建调度事件
 			Type:       pb.SchedulingDelta_PLACE,
 			TaskId:     task.Uid,
 			ResourceId: res.Uuid,
@@ -277,19 +277,20 @@ func (gm *graphManager) NodeBindingToSchedulingDelta(tid, rid flowgraph.NodeID, 
 		return sd
 	}
 
-	// Task already running somewhere.
+	// Task already running somewhere. // 如果任务已经在别的资源节点上面运行了
 	if boundRes != util.MustResourceIDFromString(res.Uuid) {
 		////log.Printf("flowmanager: migrate %v from %v to %v", task.Uid, boundRes, res.Uuid)
 		sd := &pb.SchedulingDelta{
-			Type:       pb.SchedulingDelta_MIGRATE,
+			Type:       pb.SchedulingDelta_MIGRATE,  // 进行任务迁徙
 			TaskId:     task.Uid,
 			ResourceId: res.Uuid,
 		}
 		return sd
 	}
 
+	// 为什么是上面的操作不成功时才可以执行这一步呢？
 	// We were already scheduled here. Add back the task_id to the resource's running tasks list.
-	res.CurrentRunningTasks = append(res.CurrentRunningTasks, task.Uid)
+	res.CurrentRunningTasks = append(res.CurrentRunningTasks, task.Uid) // 将该任务添加到该资源的正在运行的任务列表中，没有调度事件
 	return nil
 }
 
@@ -301,9 +302,9 @@ func (gm *graphManager) SchedulingDeltasForPreemptedTasks(taskMappings TaskMappi
 
 	for _, resourceStatus := range rmap.UnsafeGet() {
 		rd := resourceStatus.Descriptor
-		runningTasks := rd.CurrentRunningTasks
+		runningTasks := rd.CurrentRunningTasks // 该资源上当前正在运行的任务
 		for _, taskID := range runningTasks {
-			taskNode := gm.nodeForTaskID(types.TaskID(taskID))
+			taskNode := gm.nodeForTaskID(types.TaskID(taskID))  // 找到当前正在运行的任务的任务节点
 			if taskNode == nil {
 				// There's no node for the task => we don't need to generate
 				// a PREEMPT delta because the task has finished.
@@ -311,11 +312,11 @@ func (gm *graphManager) SchedulingDeltasForPreemptedTasks(taskMappings TaskMappi
 			}
 
 			_, ok := taskMappings[taskNode.ID]
-			if !ok {
+			if !ok {  // 如果这个任务节点被抢占了
 				// The task doesn't exist in the mappings => the task has been
 				// preempted.
 				////log.Printf("PREEMPTION: take %v off %v\n", taskID, resourceID)
-				preemptDelta := pb.SchedulingDelta{
+				preemptDelta := pb.SchedulingDelta{  // 创建相应的 delta 事件
 					TaskId:     uint64(taskID),
 					ResourceId: rd.Uuid,
 					Type:       pb.SchedulingDelta_PREEMPT,
@@ -328,7 +329,7 @@ func (gm *graphManager) SchedulingDeltasForPreemptedTasks(taskMappings TaskMappi
 		// EventDrivenScheduler.
 		// It is easier and less expensive to clear it and populate it back again
 		// than making sure the preempted tasks are removed.
-		rd.CurrentRunningTasks = make([]uint64, 0)
+		rd.CurrentRunningTasks = make([]uint64, 0)  // 归零，但是该机器上还是有运行的任务的，只是后续由 NodeBindingToSchedulingDeltas 来统计
 
 		// NOTE(haseeb): NodeBindingToSchedulingDeltas has been changed so,
 		// the CurrentRunningTasks have to be repopulated by whoever calls
@@ -452,10 +453,10 @@ func (gm *graphManager) TaskKilled(id types.TaskID) {
 
 func (gm *graphManager) TaskScheduled(id types.TaskID, rid types.ResourceID) {
 	taskNode := gm.nodeForTaskID(id)
-	taskNode.Type = flowgraph.NodeTypeScheduledTask
+	taskNode.Type = flowgraph.NodeTypeScheduledTask // 更新任务节点的类型为已经调度完成的任务
 
 	resNode := gm.nodeForResourceID(rid)
-	gm.updateArcsForScheduledTask(taskNode, resNode)
+	gm.updateArcsForScheduledTask(taskNode, resNode)  // 更新已经调度的任务节点的 arc
 }
 
 func (gm *graphManager) UpdateAllCostsToUnscheduledAggs() {
@@ -464,45 +465,47 @@ func (gm *graphManager) UpdateAllCostsToUnscheduledAggs() {
 			log.Panicf("gm/UpdateAllCostsToUnscheduledAggs: node for jobID:%v cannot be nil", jobNode)
 		}
 		for _, arc := range jobNode.IncomingArcMap {
-			if arc.SrcNode.IsTaskAssignedOrRunning() {
+			if arc.SrcNode.IsTaskAssignedOrRunning() { // 如果unsched的src任务节点正在运行
 				gm.updateRunningTaskNode(arc.SrcNode, false, nil, nil)
-			} else {
+			} else { // 如果还没有完成调度
 				gm.updateTaskToUnscheduledAggArc(arc.SrcNode)
 			}
 		}
 	}
 }
 
+// 完成了从 sink 节点往前进行广度遍历，更新每一个资源节点当前正在运行的任务数量（因为在上一次调度后，可能之前统计的数量已经过时）
 // ComputeTopologyStatistics does a BFS traversal starting from the sink
 // to gather and update the usage statistics for the resource topology
 func (gm *graphManager) ComputeTopologyStatistics(node *flowgraph.Node) {
 	////log.Printf("Updating resource statistics in flow graph\n")
+	// 必须得是树不能是dag图，因为是广度遍历
 	// XXX(ionel): The function only works correctly as long as the topology is a
 	// tree. If the topology is a DAG then it does not work correctly! It does
 	// not work in the DAG case because the function implements BFS. Hence,
 	// we may pop a node of the queue and propagate its statistics via its incoming
-	// arcs before we've received all the statistics at the node.
-	toVisit := queue.NewFIFO()
+	// arcs before we've received all the statistics at the node. 这里说我们会在所有的数据到来前就通过 入边 来传递数据
+	toVisit := queue.NewFIFO() // 建立一个队列来记录已经访问过的节点
 	// We maintain a value that is used to mark visited nodes. Before each
 	// visit we increment the mark to make sure that nodes visited in previous
 	// traversal are not going to be treated as marked. By using the mark
 	// variable we avoid having to reset the visited state of each node before
 	// of a traversal.
-	gm.curTraversalCounter++
-	toVisit.Push(node)
-	node.Visited = gm.curTraversalCounter
-	for !toVisit.IsEmpty() {
-		curNode := toVisit.Pop().(*flowgraph.Node)
-		for _, incomingArc := range curNode.IncomingArcMap {
-			if incomingArc.SrcNode.Visited != gm.curTraversalCounter {
-				gm.costModeler.PrepareStats(incomingArc.SrcNode)
-				toVisit.Push(incomingArc.SrcNode)
-				incomingArc.SrcNode.Visited = gm.curTraversalCounter
+	gm.curTraversalCounter++  // 遍历更新的统计次数加一
+	toVisit.Push(node) // 先把 sink 节点添加进去
+	node.Visited = gm.curTraversalCounter  // 更新该节点的已经遍历更新的次数
+	for !toVisit.IsEmpty() {  // 只要节点队列不为空
+		curNode := toVisit.Pop().(*flowgraph.Node) // 目标节点本省的容量是不清零的
+		for _, incomingArc := range curNode.IncomingArcMap { // 遍历该节点的所有的 入边
+			if incomingArc.SrcNode.Visited != gm.curTraversalCounter {  // 如果 入边 的源节点的遍历次数 和 当前遍历的次数 不相同
+				gm.costModeler.PrepareStats(incomingArc.SrcNode)  // 将 入边 资源节点的当前正在运行的任务清零
+				toVisit.Push(incomingArc.SrcNode)  // 将 入边 的源节点添加进 节点队列 （BFS 的标准操作）
+				incomingArc.SrcNode.Visited = gm.curTraversalCounter  // 将 入边 的源节点的遍历次数 更新为 当前遍历的次数
 			}
-			incomingArc.SrcNode = gm.costModeler.GatherStats(incomingArc.SrcNode, curNode)
+			incomingArc.SrcNode = gm.costModeler.GatherStats(incomingArc.SrcNode, curNode) // 如果目标节点不是 sink 节点，那么将len(源节点的运行任务)加上目标节点的运行任务数量，否则等于本身（统计 slot 和 cluster 有多少任务正在运行）
 			// The update part might not be needed since that functionality has been moved
 			// to the graph manager itself.
-			incomingArc.SrcNode = gm.costModeler.UpdateStats(incomingArc.SrcNode, curNode)
+			incomingArc.SrcNode = gm.costModeler.UpdateStats(incomingArc.SrcNode, curNode) // 暂时什么都不干
 		}
 	}
 }
@@ -629,18 +632,18 @@ func (gm *graphManager) addResourceTopologyDFS(rtnd *pb.ResourceTopologyNodeDesc
 func (gm *graphManager) addTaskNode(jobID types.JobID, td *pb.TaskDescriptor) *flowgraph.Node {
 	// TODO:
 	// trace.traceGenerator.TaskSubmitted(td)
-	gm.costModeler.AddTask(types.TaskID(td.Uid))
-	taskNode := gm.cm.AddNode(flowgraph.NodeTypeUnscheduledTask, 1, dimacs.AddTaskNode, "AddTaskNode")
+	gm.costModeler.AddTask(types.TaskID(td.Uid)) // 暂时啥都没干
+	taskNode := gm.cm.AddNode(flowgraph.NodeTypeUnscheduledTask, 1, dimacs.AddTaskNode, "AddTaskNode") // 创建supply为1的待调度任务节点，并创建事件
 	//log.Printf("Graph Manager: addTaskNode: name (%s)\n", td.Name)
 	taskNode.Task = td
 	taskNode.JobID = jobID
-	gm.sinkNode.Excess--
+	gm.sinkNode.Excess--  // sink 节点的supply 减一，因为supply为1的任务得到了调度
 	// Insert mapping tast to node, must not already have mapping
 	_, ok := gm.taskToNode[types.TaskID(td.Uid)]
 	if ok {
 		log.Panicf("gm:addTaskNode Mapping for taskID:%v to node already present\n", td.Uid)
 	}
-	gm.taskToNode[types.TaskID(td.Uid)] = taskNode
+	gm.taskToNode[types.TaskID(td.Uid)] = taskNode  // 将新创建的 task node 节点传递给 taskTONode列表
 	return taskNode
 }
 
@@ -665,8 +668,8 @@ func (gm *graphManager) capacityFromResNodeToParent(rd *pb.ResourceDescriptor) u
 
 // Pins the task (taskNode) to the resource (resourceNode).
 // This ensures that the task can only be scheduled on that particular resource(machine,core etc).
-// It does this by removing all arcs from this task node that do not point to the desired resource node.
-// If an arc from the task node to the resource node does not already exist then a new arc will be added.
+// It does this by removing all arcs from this task node that do not point to the desired resource node. // 删除到特定资源节点以外的所有的 arc
+// If an arc from the task node to the resource node does not already exist then a new arc will be added. // 如果到特定资源节点没有 arc，就新增一个
 // This arc is the running arc, indicating where this particular will run and it's cost is assigned as a TaskContinuationCost
 // from the cost model.
 func (gm *graphManager) pinTaskToNode(taskNode, resourceNode *flowgraph.Node) {
@@ -676,18 +679,19 @@ func (gm *graphManager) pinTaskToNode(taskNode, resourceNode *flowgraph.Node) {
 
 	for dstNodeID, arc := range taskNode.OutgoingArcMap {
 		// Delete any arc not pointing to the desired resource node
-		if dstNodeID != resourceNode.ID {
+		if dstNodeID != resourceNode.ID {  // 不是特定资源节点就删掉
 			// TODO(ionel): This doesn't correctly compute the type of changes. The
 			// arcs we are deleting can point to unscheduled or equiv classes as well.
-			gm.cm.DeleteArc(arc, dimacs.DelArcTaskToEquivClass, "PinTaskNode")
+			gm.cm.DeleteArc(arc, dimacs.DelArcTaskToEquivClass, "PinTaskNode")  // 产生图像的更改记录，删除对应的 arc 对象
 			continue
 		}
 
 		// This preference arc connects the same nodes as the running arc. Hence,
 		// we just transform it into the running arc.
 		addedRunningArc = true
-		newCost := int64(gm.costModeler.TaskContinuationCost(types.TaskID(taskNode.Task.Uid)))
+		newCost := int64(gm.costModeler.TaskContinuationCost(types.TaskID(taskNode.Task.Uid))) // 暂时为0
 		arc.Type = flowgraph.ArcTypeRunning
+		// 记录图的更改
 		gm.cm.ChangeArc(arc, lowBoundCapacity, 1, newCost, dimacs.ChgArcRunningTask, "PinTaskToNode: transform to running arc")
 
 		// Insert mapping for Task to RunningArc, must not already exist
@@ -699,7 +703,7 @@ func (gm *graphManager) pinTaskToNode(taskNode, resourceNode *flowgraph.Node) {
 	}
 
 	// Decrement capacity from unsched agg node to sink.
-	gm.updateUnscheduledAggNode(gm.unschedAggNodeForJobID(taskNode.JobID), -1)
+	gm.updateUnscheduledAggNode(gm.unschedAggNodeForJobID(taskNode.JobID), -1)  // 因为调度成功，且不允许抢占，所以 unsched 节点的容量减一
 	if !addedRunningArc {
 		// Add a single arc from the task to the resource node
 		newCost := int64(gm.costModeler.TaskContinuationCost(types.TaskID(taskNode.Task.Uid)))
@@ -771,17 +775,17 @@ func (gm *graphManager) removeInvalidPrefResArcs(node *flowgraph.Node, prefResou
 	// If yes, remove that arc
 	for _, arc := range node.OutgoingArcMap {
 		rID := arc.DstNode.ResourceID
-		if rID == 0 {
+		if rID == 0 { // 如果不是资源节点，那么就略掉不管
 			continue
 		}
-		if _, ok := prefResSet[rID]; !ok {
+		if _, ok := prefResSet[rID]; !ok { // 只删除那些已经不在 偏好 列表中的 arc
 			////log.Printf("Deleting no-longer-current arc to resource:%v", rID)
 			toDelete = append(toDelete, arc)
 		}
 	}
 
 	for _, arc := range toDelete {
-		gm.cm.DeleteArc(arc, changeType, "RemoveInvalidResPrefArcs")
+		gm.cm.DeleteArc(arc, changeType, "RemoveInvalidResPrefArcs") // 删除这些 arc
 	}
 }
 
@@ -842,44 +846,45 @@ func (gm *graphManager) traverseAndRemoveTopology(resNode *flowgraph.Node) []flo
 // Updates the arc of a newly scheduled task.
 // If we're running with preemption enabled then the method just adds/changes
 // an arc to the resource node and updates the arc to the unscheduled agg to
-// have the premeption cost.
+// have the premeption cost.  // 如果支持抢占，那么就 添加/更改 arc，然后更新与 unsched 节点之间的 arc 的费用
 // If we're not running with preemption enabled then the method deletes the
-// task's arcs and only adds a running arc.
+// task's arcs and only adds a running arc.  如果不支持抢占，那么就删掉旧 arc，添加新 arc
 // taskNode is the node of the task recently scheduled
 // resourceNode is the node of the resource to which the task has been
 // scheduled
 func (gm *graphManager) updateArcsForScheduledTask(taskNode, resourceNode *flowgraph.Node) {
-	if !gm.Preemption {
-		gm.pinTaskToNode(taskNode, resourceNode)
+	if !gm.Preemption {  // 不支持抢占
+		gm.pinTaskToNode(taskNode, resourceNode) // 如果不支持抢占，那么就删掉旧 arc，添加新 arc。 unsched 节点容量减一
 		return
 	}
 
+	// 如果支持抢占
 	// With preemption we do not remove any old arcs. We only add/change a running arc to
 	// the resource.
 	taskID := types.TaskID(taskNode.Task.Uid)
-	newCost := int64(gm.costModeler.TaskContinuationCost(taskID))
-	runningArc := gm.taskToRunningArc[taskID]
+	newCost := int64(gm.costModeler.TaskContinuationCost(taskID))  // 暂时为0
+	runningArc := gm.taskToRunningArc[taskID]  // 任务节点之前运行的 arc
 
-	if runningArc != nil {
+	if runningArc != nil { // 如果当前有正在运行的 arc
 		// The running arc points to the same destination as a preference arc.
 		// We just modify the preference arc because the graph doesn't currently
 		// support multi-arcs.
 		runningArc.Type = flowgraph.ArcTypeRunning
 		gm.cm.ChangeArc(runningArc, 0, 1, newCost, dimacs.ChgArcRunningTask, "UpdateArcsForScheduledTask: transform to running arc")
-		gm.updateRunningTaskToUnscheduledAggArc(taskNode)
+		gm.updateRunningTaskToUnscheduledAggArc(taskNode)  // 更新正在运行的任务节点和unsched节点的arc的费用
 		return
 	}
 
-	// No running arc was found
+	// No running arc was found  没有正在运行的arc
 	runningArc = gm.cm.AddArc(taskNode, resourceNode, 0, 1, newCost,
-		flowgraph.ArcTypeRunning, dimacs.AddArcRunningTask, "UpdateArcsForScheduledTask: add running arc")
+		flowgraph.ArcTypeRunning, dimacs.AddArcRunningTask, "UpdateArcsForScheduledTask: add running arc") // 添加一个
 	// Insert mapping for task to running arc, must not already exist
 	_, ok := gm.taskToRunningArc[taskID]
 	if ok {
 		log.Panicf("gm:updateArcsForScheduledTask Mapping for tID:%v to running arc already present\n", taskID)
 	}
 	gm.taskToRunningArc[taskID] = runningArc
-	gm.updateRunningTaskToUnscheduledAggArc(taskNode)
+	gm.updateRunningTaskToUnscheduledAggArc(taskNode) // 更新正在运行的任务节点和unsched节点的arc
 }
 
 // NOTE(haseeb): This functions modifies the input queue and map parameters, which is contrary to Go style
@@ -894,20 +899,20 @@ func (gm *graphManager) updateChildrenTasks(td *pb.TaskDescriptor, nodeQueue que
 	//log.Printf("Updating children of task:%v\n", td.Name)
 	//log.Printf("Length of children:%v\n", len(td.Spawned))
 	for _, childTask := range td.Spawned {
-		childTaskNode := gm.nodeForTaskID(types.TaskID(childTask.Uid))
+		childTaskNode := gm.nodeForTaskID(types.TaskID(childTask.Uid)) // 获取根任务的子任务节点
 		//log.Printf("Updating child task:%v\n", childTask.Name)
 
 		// If childTaskNode does not have a marked node
 		if childTaskNode != nil {
-			if _, ok := markedNodes[childTaskNode.ID]; !ok {
-				nodeQueue.Push(&taskOrNode{Node: childTaskNode, TaskDesc: childTask})
+			if _, ok := markedNodes[childTaskNode.ID]; !ok { // 如果该子任务节点没有被标记
+				nodeQueue.Push(&taskOrNode{Node: childTaskNode, TaskDesc: childTask}) // 把子任务节点压入 nodeQueue
 				markedNodes[childTaskNode.ID] = struct{}{}
 			}
 			continue
 		}
 
 		// ChildTask has no node
-		if !taskNeedNode(childTask) {
+		if !taskNeedNode(childTask) { // 该任务还不可以进行调度
 			//log.Printf("Child task:%v does not need node\n", childTask.Name)
 			nodeQueue.Push(&taskOrNode{Node: nil, TaskDesc: childTask})
 			continue
@@ -915,10 +920,10 @@ func (gm *graphManager) updateChildrenTasks(td *pb.TaskDescriptor, nodeQueue que
 
 		// ChildTask needs a node
 		jobID := util.MustJobIDFromString(childTask.JobID)
-		childTaskNode = gm.addTaskNode(jobID, childTask)
+		childTaskNode = gm.addTaskNode(jobID, childTask)  // 新增一个任务节点，产生事件
 		// Increment capacity from unsched agg node to sink.
-		gm.updateUnscheduledAggNode(gm.unschedAggNodeForJobID(jobID), 1)
-		nodeQueue.Push(&taskOrNode{Node: childTaskNode, TaskDesc: childTask})
+		gm.updateUnscheduledAggNode(gm.unschedAggNodeForJobID(jobID), 1) // 更改 unsched 节点和 sink 之间的 容量
+		nodeQueue.Push(&taskOrNode{Node: childTaskNode, TaskDesc: childTask}) // 加入到nodeQueue
 		markedNodes[childTaskNode.ID] = struct{}{}
 	}
 }
@@ -1006,20 +1011,20 @@ func (gm *graphManager) updateEquivToResArcs(ecNode *flowgraph.Node,
 
 func (gm *graphManager) updateFlowGraph(nodeQueue queue.FIFO, markedNodes map[flowgraph.NodeID]struct{}) {
 	for !nodeQueue.IsEmpty() {
-		taskOrNode := nodeQueue.Pop().(*taskOrNode)
+		taskOrNode := nodeQueue.Pop().(*taskOrNode) // pop 一个 root task 节点出来
 		node := taskOrNode.Node
 		task := taskOrNode.TaskDesc
 		switch {
 		case node == nil:
 			// We're handling a task that doesn't have an associated flow graph node.
 			gm.updateChildrenTasks(task, nodeQueue, markedNodes)
-		case node.IsTaskNode():
+		case node.IsTaskNode():  // 如果该节点为 任务节点。产生相应的费用和事件，然后递归加入后续的任务节点（不应该都是根任务么？在更新任务和偏好资源节点时，将资源节点压入了 nodeQueue）
 			//log.Printf("Updating taskNode:%v task:%v\n", node.ID, node.Task.Name)
-			gm.updateTaskNode(node, nodeQueue, markedNodes)
-			gm.updateChildrenTasks(task, nodeQueue, markedNodes)
+			gm.updateTaskNode(node, nodeQueue, markedNodes)  // 更新任务节点和 unsched节点、偏好资源节点之间的费用
+			gm.updateChildrenTasks(task, nodeQueue, markedNodes)  // 如果是任务节点，那么还得更新任务链接下来的 任务节点
 		case node.IsEquivalenceClassNode():
 			gm.updateEquivClassNode(node, nodeQueue, markedNodes)
-		case node.IsResourceNode():
+		case node.IsResourceNode(): // 如果节点为 资源节点, 产生相应的费用和事件，然后递归加入后续的资源节点
 			gm.updateResourceNode(node, nodeQueue, markedNodes)
 		default:
 			log.Panicf("gm/updateFlowGraph: Unexpected node type: %v", node.Type)
@@ -1087,25 +1092,26 @@ func (gm *graphManager) updateResourceTopologyDFS(rtnd *pb.ResourceTopologyNodeD
 }
 
 func (gm *graphManager) updateResOutgoingArcs(resNode *flowgraph.Node, nodeQueue queue.FIFO, markedNodes map[flowgraph.NodeID]struct{}) {
-	for _, arc := range resNode.OutgoingArcMap {
-		if arc.DstNode.ResourceID == 0 {
+	for _, arc := range resNode.OutgoingArcMap { // 找到资源节点的所有的 出边
+		if arc.DstNode.ResourceID == 0 { // 是否是连接的 sink 节点
 			// Connected to sink
-			gm.updateResToSinkArc(resNode)
+			gm.updateResToSinkArc(resNode) // 产生相应的费用和事件
 			continue
 		}
 
-		cost := int64(gm.costModeler.ResourceNodeToResourceNodeCost(resNode.ResourceDescriptor, arc.DstNode.ResourceDescriptor))
-		gm.cm.ChangeArcCost(arc, cost, dimacs.ChgArcBetweenRes, "UpdateResOutgoingArcs")
+		// 如果该资源节点的出边不是sink节点
+		cost := int64(gm.costModeler.ResourceNodeToResourceNodeCost(resNode.ResourceDescriptor, arc.DstNode.ResourceDescriptor)) // 资源节点到资源节点的 arc 费用更新，暂时为0
+		gm.cm.ChangeArcCost(arc, cost, dimacs.ChgArcBetweenRes, "UpdateResOutgoingArcs") // 更改资源节点到资源节点的费用，并产生事件
 		if _, ok := markedNodes[arc.DstNode.ID]; !ok {
 			// Add the dst node to the queue if it hasn't been marked yet.
 			markedNodes[arc.DstNode.ID] = struct{}{}
-			nodeQueue.Push(&taskOrNode{Node: arc.DstNode, TaskDesc: arc.DstNode.Task})
+			nodeQueue.Push(&taskOrNode{Node: arc.DstNode, TaskDesc: arc.DstNode.Task}) // 将资源节点之后的资源节点也放入 Queue 中进行更新
 		}
 	}
 }
 
 // Updates the arc connecting a resource to the sink. It requires the resource
-// to be a PU.
+// to be a PU. //必须得是 pu类型的资源节点？所以 pu就是机器节点的意思咯
 // resourceNode is the resource node for which to update its arc to the sink
 func (gm *graphManager) updateResToSinkArc(resNode *flowgraph.Node) {
 	if resNode.Type != flowgraph.NodeTypePu {
@@ -1125,6 +1131,7 @@ func (gm *graphManager) updateResToSinkArc(resNode *flowgraph.Node) {
 // Updates the cost on running arc of the task. If preemption is enabled then
 // the method also updates the preemption cost on the arc to the unscheduled
 // aggregator.
+// 更改了已经运行的任务节点的 费用
 // NOTE: nodeQueue and markedNodes can be NULL as long as updatePreferences
 // is false.
 // taskNode is the node for which to update the arcs
@@ -1132,26 +1139,26 @@ func (gm *graphManager) updateResToSinkArc(resNode *flowgraph.Node) {
 // equivalence preferences
 func (gm *graphManager) updateRunningTaskNode(taskNode *flowgraph.Node, updatePreferences bool, nodeQueue queue.FIFO, markedNodes map[flowgraph.NodeID]struct{}) {
 	taskID := types.TaskID(taskNode.Task.Uid)
-	runningArc := gm.taskToRunningArc[taskID]
+	runningArc := gm.taskToRunningArc[taskID] // 获得运行的任务节点的 出边
 	if runningArc == nil {
 		log.Panicf("gm/updateRunningTaskNode: running arc for taskNode.Task.Uid:%v must exist\n", taskNode.Task.Uid)
 	}
-	newCost := int64(gm.costModeler.TaskContinuationCost(taskID))
-	gm.cm.ChangeArcCost(runningArc, newCost, dimacs.ChgArcTaskToRes, "UpdateRunningTaskNode: continuation cost")
+	newCost := int64(gm.costModeler.TaskContinuationCost(taskID)) // 暂时为 0
+	gm.cm.ChangeArcCost(runningArc, newCost, dimacs.ChgArcTaskToRes, "UpdateRunningTaskNode: continuation cost") // 创建 更改 arc 费用的 事件
 	if !gm.Preemption {
 		return
 	}
 
-	gm.updateRunningTaskToUnscheduledAggArc(taskNode)
-	if updatePreferences {
+	gm.updateRunningTaskToUnscheduledAggArc(taskNode) // 如果开启了抢占，那么还需要更改 运行任务节点和 unsched 节点 的费用
+	if updatePreferences { // 更新 任务到 节点的偏好
 		// nodeQueue and markedNodes must not be nil at this point
-		gm.updateTaskToResArcs(taskNode, nodeQueue, markedNodes)
+		gm.updateTaskToResArcs(taskNode, nodeQueue, markedNodes) // 更新该 task 节点的偏好的 arc 的费用，并且删掉那些已经失效的 偏好arc
 		gm.updateTaskToEquivArcs(taskNode, nodeQueue, markedNodes)
 	}
 }
 
 // Updates the cost of the arc connecting a running task with its unscheduled
-// aggregator.
+// aggregator.  更新一个正在运行的任务节点和 unsched 节点的arc 的费用
 // NOTE: This method should only be called when preemption is enabled.
 // taskNode is the node for which to update the arc
 func (gm *graphManager) updateRunningTaskToUnscheduledAggArc(taskNode *flowgraph.Node) {
@@ -1164,31 +1171,31 @@ func (gm *graphManager) updateRunningTaskToUnscheduledAggArc(taskNode *flowgraph
 		log.Panicf("gm/updateRunningTaskToUnscheduledAggArc: unscheduledAggNode must exist for taskNode.JobID:%v\n", taskNode.JobID)
 	}
 
-	unschedArc := gm.cm.Graph().GetArc(taskNode, unschedAggNode)
+	unschedArc := gm.cm.Graph().GetArc(taskNode, unschedAggNode) // 获得 running task 节点和 unsched 节点的边
 	if unschedArc == nil {
 		log.Panicf("gm/updateRunningTaskToUnscheduledAggArc: unscheduledArc must exist for unschedAggNode.ID:%v\n", unschedAggNode.ID)
 	}
 
-	cost := int64(gm.costModeler.TaskPreemptionCost(types.TaskID(taskNode.Task.Uid)))
-	gm.cm.ChangeArcCost(unschedArc, cost, dimacs.ChgArcToUnsched, "UpdateRunningTaskToUnscheduledAggArc")
+	cost := int64(gm.costModeler.TaskPreemptionCost(types.TaskID(taskNode.Task.Uid))) // 暂时为 0
+	gm.cm.ChangeArcCost(unschedArc, cost, dimacs.ChgArcToUnsched, "UpdateRunningTaskToUnscheduledAggArc") // 创建更改 running task 到 unsched 节点的边的事件
 }
 
 func (gm *graphManager) updateTaskNode(taskNode *flowgraph.Node, nodeQueue queue.FIFO, markedNodes map[flowgraph.NodeID]struct{}) {
-	if taskNode.IsTaskAssignedOrRunning() {
-		gm.updateRunningTaskNode(taskNode, gm.UpdatePreferencesRunningTask, nodeQueue, markedNodes)
+	if taskNode.IsTaskAssignedOrRunning() { // 检查 task node 的状态是否已经调度或者正在运行
+		gm.updateRunningTaskNode(taskNode, gm.UpdatePreferencesRunningTask, nodeQueue, markedNodes)  // 如果正在运行，那么就可能是二次调度，需要进行迁移
 		return
 	}
 	//log.Printf("Graph Manager: updateTaskNode: id (%s)\n", taskNode.Task.Name)
-	gm.updateTaskToUnscheduledAggArc(taskNode)
+	gm.updateTaskToUnscheduledAggArc(taskNode)  // 更新任务节点和 unsched 节点之间的 arc
 	gm.updateTaskToEquivArcs(taskNode, nodeQueue, markedNodes)
-	gm.updateTaskToResArcs(taskNode, nodeQueue, markedNodes)
+	gm.updateTaskToResArcs(taskNode, nodeQueue, markedNodes) // 如果任务节点有偏好的 资源节点，那么就更新该任务节点和没有运行的的资源节点之间的费用
 }
 
 // Updates a task's outgoing arcs to ECs. If the task has new outgoing arcs
 // to new EC nodes then the method appends them to the nodeQueue. Similarly,
 // EC nodes that have not yet been marked are appended to the queue.
 func (gm *graphManager) updateTaskToEquivArcs(taskNode *flowgraph.Node, nodeQueue queue.FIFO, markedNodes map[flowgraph.NodeID]struct{}) {
-	prefECs := gm.costModeler.GetTaskEquivClasses(types.TaskID(taskNode.Task.Uid))
+	prefECs := gm.costModeler.GetTaskEquivClasses(types.TaskID(taskNode.Task.Uid))  // 偏好的 ec 节点
 	// Empty slice means no preferences
 	if len(prefECs) == 0 {
 		gm.removeInvalidECPrefArcs(taskNode, prefECs, dimacs.DelArcTaskToEquivClass)
@@ -1220,13 +1227,14 @@ func (gm *graphManager) updateTaskToEquivArcs(taskNode *flowgraph.Node, nodeQueu
 
 // Updates a task's preferences to resources.
 func (gm *graphManager) updateTaskToResArcs(taskNode *flowgraph.Node, nodeQueue queue.FIFO, markedNodes map[flowgraph.NodeID]struct{}) {
-	prefRIDs := gm.costModeler.GetTaskPreferenceArcs(types.TaskID(taskNode.Task.Uid))
+	prefRIDs := gm.costModeler.GetTaskPreferenceArcs(types.TaskID(taskNode.Task.Uid)) // 当前默认没有偏向的机器
 	// Empty slice means no preferences
 	if len(prefRIDs) == 0 {
-		gm.removeInvalidPrefResArcs(taskNode, prefRIDs, dimacs.DelArcTaskToRes)
+		gm.removeInvalidPrefResArcs(taskNode, prefRIDs, dimacs.DelArcTaskToRes) // 如果当前没有偏向的机器，那么就直接删除该任务节点到所有的机器节点的 arc
 		return
 	}
 
+	// 如果有偏向的资源节点
 	for _, prefRID := range prefRIDs {
 		prefResNode := gm.nodeForResourceID(prefRID)
 		// The resource node should already exist because the cost models cannot
@@ -1234,42 +1242,44 @@ func (gm *graphManager) updateTaskToResArcs(taskNode *flowgraph.Node, nodeQueue 
 		if prefResNode == nil {
 			log.Panicf("gm/updateTaskToResArcs: preferred resource node cannot be nil")
 		}
-		newCost := int64(gm.costModeler.TaskToResourceNodeCost(types.TaskID(taskNode.Task.Uid), prefRID))
-		prefResArc := gm.cm.Graph().GetArc(taskNode, prefResNode)
+		newCost := int64(gm.costModeler.TaskToResourceNodeCost(types.TaskID(taskNode.Task.Uid), prefRID)) // 现在 running task 到 resource 节点的费用为0
+		prefResArc := gm.cm.Graph().GetArc(taskNode, prefResNode) // 获得该偏好的 Node 的 arc
 
 		if prefResArc == nil {
 			gm.cm.AddArc(taskNode, prefResNode, 0, 1, newCost, flowgraph.ArcTypeOther, dimacs.AddArcTaskToRes, "UpdateTaskToResArcs")
-		} else if prefResArc.Type != flowgraph.ArcTypeRunning {
+		} else if prefResArc.Type != flowgraph.ArcTypeRunning { // 如果这个偏好的资源之间的 arc 并没有运行，就只是更新 arc 的费用
 			// We don't change the cost of the arc if it's a running arc because
 			// the arc is updated somewhere else. Moreover, the cost of running
 			// arcs is returned by TaskContinuationCost.
-			gm.cm.ChangeArcCost(prefResArc, int64(newCost), dimacs.ChgArcTaskToRes, "UpdateTaskToResArcs")
+			gm.cm.ChangeArcCost(prefResArc, int64(newCost), dimacs.ChgArcTaskToRes, "UpdateTaskToResArcs") // 产生 更改 边的费用的 事件
 		}
 
 		if _, ok := markedNodes[prefResNode.ID]; !ok {
 			// Add the res node to the queue if it hasn't been marked yet.
 			markedNodes[prefResNode.ID] = struct{}{}
-			nodeQueue.Push(&taskOrNode{Node: prefResNode, TaskDesc: prefResNode.Task})
+			nodeQueue.Push(&taskOrNode{Node: prefResNode, TaskDesc: prefResNode.Task}) // 在这里往 nodeQueue 中添加了资源节点
 		}
 	}
-	gm.removeInvalidPrefResArcs(taskNode, prefRIDs, dimacs.DelArcTaskToRes)
+	gm.removeInvalidPrefResArcs(taskNode, prefRIDs, dimacs.DelArcTaskToRes) // 删除已经失效的 偏好arc
 }
 
 // Updates the arc from a task to its unscheduled aggregator. The method
 // adds the unscheduled if it doesn't already exist.
 // returns the unscheduled aggregator node
+// 更新任务节点和 unsched 节点之间的 arc。
 func (gm *graphManager) updateTaskToUnscheduledAggArc(taskNode *flowgraph.Node) *flowgraph.Node {
-	unschedAggNode := gm.unschedAggNodeForJobID(taskNode.JobID)
+	unschedAggNode := gm.unschedAggNodeForJobID(taskNode.JobID) // 获取 unscehd 节点
 	if unschedAggNode == nil {
-		unschedAggNode = gm.addUnscheduledAggNode(taskNode.JobID)
+		unschedAggNode = gm.addUnscheduledAggNode(taskNode.JobID) // 如果该 job 没有 unsched 节点，创建一个
 	}
-	newCost := int64(gm.costModeler.TaskToUnscheduledAggCost(types.TaskID(taskNode.Task.Uid)))
+	newCost := int64(gm.costModeler.TaskToUnscheduledAggCost(types.TaskID(taskNode.Task.Uid))) // 暂时为 5
 	toUnschedArc := gm.cm.Graph().GetArc(taskNode, unschedAggNode)
 
 	if toUnschedArc == nil {
+		// 对于新的任务节点，新增一个arc，产生事件，费用为5，容量为1，arctype 为未运行
 		gm.cm.AddArc(taskNode, unschedAggNode, 0, 1, newCost, flowgraph.ArcTypeOther, dimacs.AddArcToUnsched, "UpdateTaskToUnscheduledAggArc")
 	} else {
-		gm.cm.ChangeArcCost(toUnschedArc, newCost, dimacs.ChgArcToUnsched, "UpdateTaskToUnscheduledAggArc")
+		gm.cm.ChangeArcCost(toUnschedArc, newCost, dimacs.ChgArcToUnsched, "UpdateTaskToUnscheduledAggArc") // 添加任务节点到 unsched 节点的费用的更改事件
 	}
 	return unschedAggNode
 }
@@ -1279,11 +1289,11 @@ func (gm *graphManager) updateTaskToUnscheduledAggArc(taskNode *flowgraph.Node) 
 // unschedAggNode is the unscheduled aggregator node
 // capDelta is the delta by which to change the capacity
 func (gm *graphManager) updateUnscheduledAggNode(unschedAggNode *flowgraph.Node, capDelta int64) {
-	unschedAggSinkArc := gm.cm.Graph().GetArc(unschedAggNode, gm.sinkNode)
-	newCost := int64(gm.costModeler.UnscheduledAggToSinkCost(unschedAggNode.JobID))
+	unschedAggSinkArc := gm.cm.Graph().GetArc(unschedAggNode, gm.sinkNode) // 获得 unsched 节点到 sink 节点的 出边
+	newCost := int64(gm.costModeler.UnscheduledAggToSinkCost(unschedAggNode.JobID)) // 暂时费用都为 0
 	if unschedAggSinkArc != nil {
-		newCapacity := uint64(int64(unschedAggSinkArc.CapUpperBound) + capDelta)
-		gm.cm.ChangeArc(unschedAggSinkArc, unschedAggSinkArc.CapLowerBound, newCapacity, newCost, dimacs.ChgArcFromUnsched, "UpdateUnscheduledAggNode")
+		newCapacity := uint64(int64(unschedAggSinkArc.CapUpperBound) + capDelta) // 给 出边 的容量加上 capDelta
+		gm.cm.ChangeArc(unschedAggSinkArc, unschedAggSinkArc.CapLowerBound, newCapacity, newCost, dimacs.ChgArcFromUnsched, "UpdateUnscheduledAggNode") // 创建更改 arc 的容量的事件
 		return
 	}
 

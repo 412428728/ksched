@@ -3,7 +3,7 @@
 
 # Prepare base image
 FROM ubuntu:14.04
-MAINTAINER Haseeb Tariq <haseeb.tariq@coreos.com>
+MAINTAINER XiangHao <xianghao16@otcaix.iscas.ac.cn>
 RUN apt-get update
 RUN apt-get --yes --force-yes install git-all build-essential cmake libgflags2 libgflags-dev libgoogle-glog0 libgoogle-glog-dev libboost-all-dev curl wget autoconf automake libtool curl make g++ unzip
 
@@ -20,7 +20,7 @@ RUN cd /root && curl -O https://storage.googleapis.com/golang/go1.6.linux-amd64.
 RUN mkdir -p /root/go-workspace/src/github.com/coreos
 
 # Set up kubernetes in go workspace
-RUN mkdir /root/go-workspace/src/k8s.io && cd /root/go-workspace/src/github.com/ && git clone https://github.com/kubernetes/kubernetes.git && mv /root/go-workspace/src/github.com/kubernetes /root/go-workspace/src/k8s.io/
+RUN mkdir /root/go-workspace/src/k8s.io && cd /root/go-workspace/src/github.com/ && git clone -b release-1.3 https://github.com/kubernetes/kubernetes.git && mv /root/go-workspace/src/github.com/kubernetes /root/go-workspace/src/k8s.io/
 
 # Set up proto stuff
 RUN cd /root && mkdir proto-bin && cd proto-bin && wget "https://github.com/google/protobuf/releases/download/v3.0.0/protoc-3.0.0-linux-x86_64.zip" && unzip protoc-3.0.0-linux-x86_64.zip && cp bin/protoc /usr/local/bin/protoc

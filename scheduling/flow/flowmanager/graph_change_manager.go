@@ -74,9 +74,9 @@ type changeManager struct {
 	MergeToSameArc         bool
 	PurgeBeforeNodeRemoval bool
 
-	flowGraph *flowgraph.Graph
+	flowGraph *flowgraph.Graph // 图对象在 changeManager 对象里面，负责图的底层操作的抽象，也就node 和 arc 的增删会更新该对象
 	// Vector storing the graph changes occured since the last scheduling round.
-	graphChanges []dimacs.Change
+	graphChanges []dimacs.Change // 记录自上次调度以来的所有的图的改变
 	dimacsStats  *dimacs.ChangeStats
 }
 
@@ -99,7 +99,7 @@ func (cm *changeManager) AddArc(src, dst *flowgraph.Node,
 
 	//log.Printf("Change:%s - Added arc from src(%s):%d to dst(%s):%d\n", comment, src.Type, src.ID, dst.Type, dst.ID)
 
-	arc := cm.flowGraph.AddArc(src, dst)
+	arc := cm.flowGraph.AddArc(src, dst)  // 添加 arc
 	arc.CapLowerBound = capLowerBound
 	arc.CapUpperBound = capUpperBound
 	arc.Cost = cost
@@ -107,23 +107,22 @@ func (cm *changeManager) AddArc(src, dst *flowgraph.Node,
 
 	change := dimacs.NewCreateArcChange(arc)
 	change.SetComment(comment)
-	cm.addGraphChange(change)
+	cm.addGraphChange(change) // 图像更改记录
 	cm.dimacsStats.UpdateStats(changeType)
 	return arc
 }
 
 func (cm *changeManager) AddNode(t flowgraph.NodeType, excess int64, changeType dimacs.ChangeType, comment string) *flowgraph.Node {
-	n := cm.flowGraph.AddNode()
-	n.Type = t
+	n := cm.flowGraph.AddNode()  // 创建一个新的全新 Node 数据结构，入边 和 出边 都是空的
+	n.Type = t  // 是否已经调度，一般是没调度
 	n.Excess = excess
 	n.Comment = comment
 
 	//log.Printf("Change:%s - Added node(%s):%d\n", comment, n.Type, n.ID)
-
-	change := dimacs.NewAddNodeChange(n)
+	change := dimacs.NewAddNodeChange(n) // 创建一个 AddNodeChange 数据结构
 	change.SetComment(comment)
-	cm.addGraphChange(change)
-	cm.dimacsStats.UpdateStats(changeType)
+	cm.addGraphChange(change)  // 将这个 AddNodeChange 数据结构添加到 cm.graphChanges 列表中
+	cm.dimacsStats.UpdateStats(changeType) // 暂时什么都没做
 	return n
 }
 
@@ -134,7 +133,7 @@ func (cm *changeManager) DeleteNode(n *flowgraph.Node, changeType dimacs.ChangeT
 		ID: uint64(n.ID),
 	}
 	change.SetComment(comment)
-	cm.addGraphChange(change)
+	cm.addGraphChange(change)  // 图像更改记录
 	cm.dimacsStats.UpdateStats(changeType)
 	cm.flowGraph.DeleteNode(n)
 
@@ -146,14 +145,14 @@ func (cm *changeManager) ChangeArc(arc *flowgraph.Arc, lower, upper uint64, cost
 		return
 	}
 
-	arc.CapLowerBound = lower
+	arc.CapLowerBound = lower // 这个 lower 是什么？
 	arc.CapUpperBound = upper
 	arc.Cost = cost
 
 	change := dimacs.NewUpdateArcChange(arc, oldCost)
 	change.SetComment(comment)
-	cm.addGraphChange(change)
-	cm.dimacsStats.UpdateStats(changeType)
+	cm.addGraphChange(change) // 图像更改记录
+	cm.dimacsStats.UpdateStats(changeType) // 暂时什么都没干
 }
 
 func (cm *changeManager) ChangeArcCapacity(arc *flowgraph.Arc, capacity uint64, changeType dimacs.ChangeType, comment string) {
@@ -165,7 +164,7 @@ func (cm *changeManager) ChangeArcCapacity(arc *flowgraph.Arc, capacity uint64, 
 
 	change := dimacs.NewUpdateArcChange(arc, arc.Cost)
 	change.SetComment(comment)
-	cm.addGraphChange(change)
+	cm.addGraphChange(change) // 图像更改记录
 	cm.dimacsStats.UpdateStats(changeType)
 }
 
@@ -178,7 +177,7 @@ func (cm *changeManager) ChangeArcCost(arc *flowgraph.Arc, cost int64, changeTyp
 
 	change := dimacs.NewUpdateArcChange(arc, oldCost)
 	change.SetComment(comment)
-	cm.addGraphChange(change)
+	cm.addGraphChange(change)  // 图像更改记录
 	cm.dimacsStats.UpdateStats(changeType)
 }
 
@@ -188,9 +187,9 @@ func (cm *changeManager) DeleteArc(arc *flowgraph.Arc, changeType dimacs.ChangeT
 	//log.Printf("Change:%s - Deleted arc from src(%s):%d to dst(%s):%d\n", comment, arc.SrcNode.Type, arc.SrcNode.ID, arc.DstNode.Type, arc.DstNode.ID)
 	change := dimacs.NewUpdateArcChange(arc, arc.Cost)
 	change.SetComment(comment)
-	cm.addGraphChange(change)
+	cm.addGraphChange(change)  // 图像更改记录
 	cm.dimacsStats.UpdateStats(changeType)
-	cm.flowGraph.DeleteArc(arc)
+	cm.flowGraph.DeleteArc(arc) // 删除 arc
 }
 
 func (cm *changeManager) GetGraphChanges() []dimacs.Change {

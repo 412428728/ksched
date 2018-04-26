@@ -22,7 +22,7 @@ type trivialCostModeler struct {
 	leafResIDset map[types.ResourceID]struct{}
 	// Mapping betweeen machine res id and resource topology node descriptor.
 	// It's updated in Add, Remove Machine methods.
-	machineToResTopo map[types.ResourceID]*pb.ResourceTopologyNodeDescriptor
+	machineToResTopo map[types.ResourceID]*pb.ResourceTopologyNodeDescriptor // 记录resourceId到resourveDescriptor的表.会根据机器ID的增减进行更新
 	//Flag set on initialization
 	maxTasksPerPu uint64
 }
@@ -37,19 +37,20 @@ func NewTrivial(resourceMap *types.ResourceMap, taskMap *types.TaskMap, leafResI
 	}
 }
 
-func (t *trivialCostModeler) TaskToUnscheduledAggCost(types.TaskID) Cost {
+// 这下面的这个magic number是什么意思？？
+func (t *trivialCostModeler) TaskToUnscheduledAggCost(types.TaskID) Cost {  // 不调度任务的费用为 5
 	return 5
 }
 
-func (t *trivialCostModeler) UnscheduledAggToSinkCost(types.JobID) Cost {
+func (t *trivialCostModeler) UnscheduledAggToSinkCost(types.JobID) Cost {  // 不调度任务到结束的费用为 0
 	return 0
 }
 
-func (t *trivialCostModeler) TaskToResourceNodeCost(types.TaskID, types.ResourceID) Cost {
+func (t *trivialCostModeler) TaskToResourceNodeCost(types.TaskID, types.ResourceID) Cost {  // 任务到资源节点的花费为0
 	return 0
 }
 
-func (t *trivialCostModeler) ResourceNodeToResourceNodeCost(source *pb.ResourceDescriptor, destination *pb.ResourceDescriptor) Cost {
+func (t *trivialCostModeler) ResourceNodeToResourceNodeCost(source *pb.ResourceDescriptor, destination *pb.ResourceDescriptor) Cost {  // 资源节点到资源节点之间的费用为0
 	return 0
 }
 
@@ -117,7 +118,7 @@ func (t *trivialCostModeler) GetTaskPreferenceArcs(types.TaskID) []types.Resourc
 		}
 	*/
 	// Return no preferences
-	return []types.ResourceID{}
+	return []types.ResourceID{} // 默认是没有偏好的 arc
 }
 
 func (t *trivialCostModeler) GetEquivClassToEquivClassesArcs(types.EquivClass) []types.EquivClass {
@@ -147,9 +148,9 @@ func (t *trivialCostModeler) GatherStats(accumulator *flowgraph.Node, other *flo
 	if !accumulator.IsResourceNode() {
 		return accumulator
 	}
-	if !other.IsResourceNode() {
+	if !other.IsResourceNode() { // 边的目标节点如果不是资源节点，需要考虑是否是 sink 节点的情况
 		if other.Type == flowgraph.NodeTypeSink {
-			accumulator.ResourceDescriptor.NumRunningTasksBelow = uint64(len(accumulator.ResourceDescriptor.CurrentRunningTasks))
+			accumulator.ResourceDescriptor.NumRunningTasksBelow = uint64(len(accumulator.ResourceDescriptor.CurrentRunningTasks)) // 将边的源头节点当前的任务量置为源节点的当前运行任务量
 			accumulator.ResourceDescriptor.NumSlotsBelow = t.maxTasksPerPu
 		}
 		return accumulator
@@ -158,20 +159,20 @@ func (t *trivialCostModeler) GatherStats(accumulator *flowgraph.Node, other *flo
 		panic(fmt.Errorf("the ResourceDescriptor of node (%d) is nil", other.ID))
 	}
 
-	accumulator.ResourceDescriptor.NumRunningTasksBelow += other.ResourceDescriptor.NumRunningTasksBelow
+	accumulator.ResourceDescriptor.NumRunningTasksBelow += other.ResourceDescriptor.NumRunningTasksBelow // 将 目标节点当前运行的任务数量加到 源节点上面
 	accumulator.ResourceDescriptor.NumSlotsBelow += other.ResourceDescriptor.NumSlotsBelow
 	return accumulator
 }
 
 func (t *trivialCostModeler) PrepareStats(accumulator *flowgraph.Node) {
-	if !accumulator.IsResourceNode() {
+	if !accumulator.IsResourceNode() { // 不是资源节点（资源节点的具体定义有待商榷）
 		return
 	}
-	if accumulator.ResourceDescriptor == nil {
+	if accumulator.ResourceDescriptor == nil {  // 该资源节点没有绑定资源
 		panic(fmt.Errorf("the ResourceDescriptor of node (%d) is nil", accumulator.ID))
 	}
-	accumulator.ResourceDescriptor.NumRunningTasksBelow = 0
-	accumulator.ResourceDescriptor.NumSlotsBelow = 0
+	accumulator.ResourceDescriptor.NumRunningTasksBelow = 0  // 将当前的资源下的任务数量清零
+	accumulator.ResourceDescriptor.NumSlotsBelow = 0 // 将当前的资源下的 slot 清零
 }
 
 func (t *trivialCostModeler) UpdateStats(accumulator *flowgraph.Node, other *flowgraph.Node) *flowgraph.Node {

@@ -24,14 +24,14 @@ const (
 
 // Represents an arc in the scheduling flow graph.
 type Arc struct {
-	Src     NodeID
+	Src     NodeID // ARC 是有方向的
 	Dst     NodeID
 	SrcNode *Node
 	DstNode *Node
 
-	CapLowerBound uint64
-	CapUpperBound uint64
-	Cost          int64
+	CapLowerBound uint64 // cap 下限？
+	CapUpperBound uint64 // cap 上限？
+	Cost          int64  // 每个arc都自带cost
 	Type          ArcType
 }
 

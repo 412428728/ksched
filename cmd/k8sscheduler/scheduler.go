@@ -62,20 +62,20 @@ type k8scheduler struct {
 }
 
 func New(client *k8sclient.Client, maxTasksPerPu int) *k8scheduler {
-	resourceMap := types.NewResourceMap()
-	jobMap := types.NewJobMap()
-	taskMap := types.NewTaskMap()
+	resourceMap := types.NewResourceMap()  // resourceID -> resourceStats
+	jobMap := types.NewJobMap()  // jobID -> jobDescriptor
+	taskMap := types.NewTaskMap()  // taskID -> taskDescriptor
 	rootNode := &pb.ResourceTopologyNodeDescriptor{
 		ResourceDesc: createResourceDesc(pb.ResourceDescriptor_ResourceCoordinator, 0),
 	}
 	flowScheduler := flowscheduler.NewScheduler(resourceMap, jobMap, taskMap, rootNode, uint64(maxTasksPerPu))
 
 	return &k8scheduler{
-		nodeToMachineID: make(map[string]string),
-		machineToNodeID: make(map[string]string),
-		podToTaskID:     make(map[string]uint64),
-		taskToPodID:     make(map[uint64]string),
-		oldTaskBindings: make(map[types.TaskID]types.ResourceID),
+		nodeToMachineID: make(map[string]string), // nodeID -> machineID
+		machineToNodeID: make(map[string]string),  // machineID -> NodeID  这说明machine和node是单对单关系
+		podToTaskID:     make(map[string]uint64),  // podID -> taskID
+		taskToPodID:     make(map[uint64]string), // taskID -> podID  这说明task 和 pod 也是单对单关系
+		oldTaskBindings: make(map[types.TaskID]types.ResourceID), // 任务id -> 资源id
 		resourceMap:     resourceMap,
 		jobMap:          jobMap,
 		taskMap:         taskMap,
@@ -88,7 +88,7 @@ func New(client *k8sclient.Client, maxTasksPerPu int) *k8scheduler {
 
 func main() {
 	// Initialize the kubernetes client
-	config := k8sclient.Config{Addr: address}
+	config := k8sclient.Config{Addr: address}  //
 	client, err := k8sclient.New(config, podChanSize)
 	if err != nil {
 		panic(err)
@@ -115,12 +115,12 @@ func (ks *k8scheduler) Run(client *k8sclient.Client) {
 
 	// TODO: Need to rethink later on how to distinguish whether a Pod should be a Task or a Job
 	// Add one Job to the graph, under which all incoming pods will be added as tasks
-	jobID := addNewJob(ks.jobMap, ks.flowScheduler)
+	jobID := addNewJob(ks.jobMap, ks.flowScheduler) // 创建一个空 JOB, 并注册给 flowScheduler
 
 	// Loop: Read pods, Schedule, and Assign Bindings
 	for {
 		// Process batch of new Pod updates
-		newPods := client.GetPodBatch(time.Duration(batchTimeout) * time.Second)
+		newPods := client.GetPodBatch(time.Duration(batchTimeout) * time.Second) // 固定时间段获得一次K8S集群的pod creation消息，返回 pod id 列表
 
 		// No need to schedule or assign task bindings if no new pods
 		if len(newPods) == 0 {
@@ -129,23 +129,23 @@ func (ks *k8scheduler) Run(client *k8sclient.Client) {
 
 		log.Printf("Adding Pods as tasks to scheduler\n")
 		// Add every new pod as a new task in the flowgraph
-		for _, pod := range newPods {
+		for _, pod := range newPods { // 创建一个任务，并绑定该任务与pod
 			// Skip addition if duplicate podID
 			if _, ok := ks.podToTaskID[pod.ID]; ok {
 				fmt.Printf("Skipping already existing Pod:%v ==> Task:%v\n", pod.ID, ks.podToTaskID[pod.ID])
 				continue
 			}
 			// Add the task to the job
-			taskID := addTaskToJob(jobID, ks.jobMap, ks.taskMap)
+			taskID := addTaskToJob(jobID, ks.jobMap, ks.taskMap) //随机创建一个新的task
 			// Insert mapping for task to pod
-			ks.podToTaskID[pod.ID] = uint64(taskID)
-			ks.taskToPodID[uint64(taskID)] = pod.ID
+			ks.podToTaskID[pod.ID] = uint64(taskID) // 绑定pod到task上面
+			ks.taskToPodID[uint64(taskID)] = pod.ID // 绑定task到pod上
 		}
 
 		fmt.Printf("\nScheduling all tasks\n")
 		start := time.Now()
 		// Peform a scheduling iteration
-		ks.flowScheduler.ScheduleAllJobs()
+		ks.flowScheduler.ScheduleAllJobs()  // 完成所有的tasks调度
 		elapsed := time.Since(start)
 		fmt.Printf("Time taken to schedule all tasks:%s\n", elapsed)
 

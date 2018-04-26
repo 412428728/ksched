@@ -13,6 +13,7 @@ func Export(g *flowgraph.Graph, w io.Writer) {
 	fmt.Fprintf(w, "p min %d %d\n", g.NumNodes(), g.NumArcs())
 	fmt.Fprint(w, "c ===========================\n")
 
+	// 根据所有关于 node 和 arc 的事件来进行输出，输出的内容其实就是调度结果
 	fmt.Fprint(w, "c === ALL NODES FOLLOW ===\n")
 	for _, n := range g.Nodes() {
 		generateNode(n, w)
@@ -39,9 +40,9 @@ func ExportIncremental(changes []Change, w io.Writer) {
 func generateNode(n *flowgraph.Node, w io.Writer) {
 	// dimacs comments
 	switch {
-	case n.ResourceDescriptor != nil:
+	case n.ResourceDescriptor != nil: // 是资源节点
 		fmt.Fprintf(w, "c nd Res_%s %s\n", n.ResourceDescriptor.Uuid, pb.ResourceDescriptor_ResourceType_name[int32(n.ResourceDescriptor.Type)])
-	case n.Task != nil:
+	case n.Task != nil: // 是任务节点
 		fmt.Fprintf(w, "c nd Task_%d\n", n.Task.Uid)
 	case n.EquivClass != nil:
 		fmt.Fprintf(w, "c nd EC_%d\n", *n.EquivClass)

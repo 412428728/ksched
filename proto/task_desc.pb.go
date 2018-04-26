@@ -104,7 +104,7 @@ type TaskDescriptor struct {
 	// Command and arguments
 	Binary []byte   `protobuf:"bytes,8,opt,name=binary,proto3" json:"binary,omitempty"`
 	Args   []string `protobuf:"bytes,9,rep,name=args" json:"args,omitempty"`
-	// Children
+	// Children 任务列表由 RootTask 下面的 task 列表来表示
 	Spawned []*TaskDescriptor `protobuf:"bytes,10,rep,name=spawned" json:"spawned,omitempty"`
 	// Runtime meta-data
 	ScheduledToResource   string `protobuf:"bytes,11,opt,name=scheduled_to_resource,json=scheduledToResource,proto3" json:"scheduled_to_resource,omitempty"`

@@ -18,30 +18,30 @@ type TaskSet map[types.TaskID]struct{}
 
 type scheduler struct {
 	// Fields specific to every scheduler, originally present in the interface
-	resourceMap      *types.ResourceMap
-	jobMap           *types.JobMap
-	taskMap          *types.TaskMap
+	resourceMap      *types.ResourceMap  // 和 k8sScheduler 相同
+	jobMap           *types.JobMap // 和 k8sScheduler 相同
+	taskMap          *types.TaskMap // 和 k8sScheduler 相同
 	resourceTopology *pb.ResourceTopologyNodeDescriptor
 
 	// Flow scheduler specific fields
-	gm          flowmanager.GraphManager
-	solver      placement.Solver
-	dimacsStats *dimacs.ChangeStats
+	gm          flowmanager.GraphManager //用来更改图的
+	solver      placement.Solver //GraphManager的更高一层抽象
+	dimacsStats *dimacs.ChangeStats  // 记录图的变化？
 	// Root nodes(presumably machines) of all the resources in the topology
-	resourceRoots map[*pb.ResourceTopologyNodeDescriptor]struct{}
+	resourceRoots map[*pb.ResourceTopologyNodeDescriptor]struct{}  // 资源节点的根节点？
 
 	// Event driven scheduler specific fields
 	// Note: taskBindings tracks the old state of which task maps to which resource (before each iteration).
-	TaskBindings map[types.TaskID]types.ResourceID
+	TaskBindings map[types.TaskID]types.ResourceID // 记录每次调度过程之前的旧的 task 到 resource 的绑定？他和k8sscheduler的oldTaskBindings有什么区别？
 	// Similar to taskBindings but tracks tasks binded to every resource. This is a multimap
-	resourceBindings map[types.ResourceID]TaskSet
+	resourceBindings map[types.ResourceID]TaskSet // 记录每次调度过程之前的旧的 resource 到 task 的绑定。是多值哈希表，一个resource可以有多个task
 	// A vector holding descriptors of the jobs to be scheduled in the next scheduling round.
-	jobsToSchedule map[types.JobID]*pb.JobDescriptor
+	jobsToSchedule map[types.JobID]*pb.JobDescriptor // 记录下次需要进行调度的job
 	// Sets of runnable and blocked tasks in each job. Multimap
 	// Originally maintained up by ComputeRunnableTasksForJob() and LazyGraphReduction()
 	// by checking and resolving dependencies between tasks. We will avoid that for now
 	// and simply declare all tasks as runnable
-	runnableTasks map[types.JobID]TaskSet
+	runnableTasks map[types.JobID]TaskSet // 记录下次需要调度的job中可以运行的所有的task。最开始需要使用ComputeRunnableTasksForJob() 和 LazyGraphReduction()来维护依赖关系，但是现在我们先假定都是可以运行
 }
 
 // Initialize a new scheduler. All the input parameters will need to be kept updated by the caller
@@ -54,7 +54,7 @@ type scheduler struct {
 func NewScheduler(resourceMap *types.ResourceMap, jobMap *types.JobMap, taskMap *types.TaskMap,
 	root *pb.ResourceTopologyNodeDescriptor, maxTasksPerPu uint64) Scheduler {
 	// Initialize graph manager with trivial cost model
-	leafResourceIDs := make(map[types.ResourceID]struct{})
+	leafResourceIDs := make(map[types.ResourceID]struct{}) // 记录叶子资源节点？
 	dimacsStats := &dimacs.ChangeStats{}
 	costModeler := costmodel.NewTrivial(resourceMap, taskMap, leafResourceIDs, maxTasksPerPu)
 	gm := flowmanager.NewGraphManager(costModeler, leafResourceIDs, dimacsStats, maxTasksPerPu)
@@ -211,21 +211,21 @@ func (s *scheduler) DeregisterResource(rtnd *pb.ResourceTopologyNodeDescriptor) 
 
 func (s *scheduler) HandleTaskPlacement(td *pb.TaskDescriptor, rd *pb.ResourceDescriptor) {
 	// Flow scheduler related work
-	td.ScheduledToResource = rd.Uuid
+	td.ScheduledToResource = rd.Uuid  // 任务节点的调度目标进行更新
 	taskID := types.TaskID(td.Uid)
-	s.gm.TaskScheduled(taskID, util.MustResourceIDFromString(rd.Uuid))
+	s.gm.TaskScheduled(taskID, util.MustResourceIDFromString(rd.Uuid)) // 更新任务节点的类型为已经调度和arc的状态
 
 	// Event scheduler related work
-	s.bindTaskToResource(td, rd)
+	s.bindTaskToResource(td, rd) // 更新相关的任务binding列表和资源binding列表
 	// Remove the task from the runnable_tasks
 	jobID := util.MustJobIDFromString(td.JobID)
 	runnablesForJob := s.runnableTasks[jobID]
 	if runnablesForJob != nil {
-		delete(runnablesForJob, taskID)
+		delete(runnablesForJob, taskID) // 将已经调度完成的任务从待调度的列表中删除
 	}
 
 	// Execute the task on the resource
-	s.executeTask(td, rd)
+	s.executeTask(td, rd) // 更新 TaskDescriptor 的相关状态和调度目标
 }
 
 func (s *scheduler) HandleTaskEviction(td *pb.TaskDescriptor, rd *pb.ResourceDescriptor) {
@@ -310,7 +310,7 @@ func (s *scheduler) ScheduleAllJobs() (uint64, []pb.SchedulingDelta) {
 	jds := make([]*pb.JobDescriptor, 0)
 	for _, jobDesc := range s.jobsToSchedule {
 		// If at least one task is runnable in the job, add it for scheduling
-		if len(s.computeRunnableTasksForJob(jobDesc)) > 0 {
+		if len(s.computeRunnableTasksForJob(jobDesc)) > 0 { // 过滤 job 的 task，转 Created、Blocking 为 Runnable
 			jds = append(jds, jobDesc)
 		}
 	}
@@ -319,17 +319,17 @@ func (s *scheduler) ScheduleAllJobs() (uint64, []pb.SchedulingDelta) {
 
 // Flow scheduler method
 func (s *scheduler) ScheduleJobs(jdsRunnable []*pb.JobDescriptor) (uint64, []pb.SchedulingDelta) {
-	numScheduledTasks := uint64(0)
+	numScheduledTasks := uint64(0) // 记录调度完成的任务的数量
 	deltas := make([]pb.SchedulingDelta, 0)
-	if len(jdsRunnable) > 0 {
-		s.updateCostModelResourceStats()
-		s.gm.AddOrUpdateJobNodes(jdsRunnable)
+	if len(jdsRunnable) > 0 { // 开始运用图模型来进行调度
+		s.updateCostModelResourceStats()  // 统计该图所有资源节点当前正在运行的任务数量
+		s.gm.AddOrUpdateJobNodes(jdsRunnable)  // 设置任务和unsched节点、Ec节点、资源节点相应的 arc 容量和费用，是一个传递式的往后直到 sink 的全arc费用的更新
 		numScheduledTasks, deltas = s.runSchedulingIteration()
 		log.Printf("Scheduling Iteration complete, placed %v tasks\n", numScheduledTasks)
 
 		// We reset the DIMACS stats here because all the graph changes we make
 		// from now on are going to be included in the next scheduler run.
-		s.dimacsStats.ResetStats()
+		s.dimacsStats.ResetStats() // 调度完后，重新初始化图的参数为0
 		// TODO
 		// If the support for the trace generator is ever added then log the dimacs changes
 		// for this iteration before resetting them
@@ -347,24 +347,24 @@ func (s *scheduler) runSchedulingIteration() (uint64, []pb.SchedulingDelta) {
 	// - In original code, it also handles time dependent cost updating. Ignored here.
 	// - No purging of unconnected EC.
 
-	taskMappings := s.solver.Solve()
+	taskMappings := s.solver.Solve() // 求当前图的最佳调度
 
 	// We first generate the deltas for the preempted tasks in a separate step.
 	// Otherwise, we would have to maintain for every ResourceDescriptor the
 	// current_running_tasks field which would be expensive because
 	// RepeatedFields don't have any efficient remove element method.
-	deltas := s.gm.SchedulingDeltasForPreemptedTasks(taskMappings, s.resourceMap)
+	deltas := s.gm.SchedulingDeltasForPreemptedTasks(taskMappings, s.resourceMap)  //如果调度抢占了某些任务，创建相应的抢占事件
 
-	for taskNodeID, resourceNodeID := range taskMappings {
+	for taskNodeID, resourceNodeID := range taskMappings { // taskMapping 存储是 taskNodeID -> resourceNodeID
 		// fmt.Printf("taskNode:%d going to resourceNode:%d\n", taskNodeID, resourceNodeID)
 		// Note: Ignore those completed, removal check...
-		delta := s.gm.NodeBindingToSchedulingDelta(taskNodeID, resourceNodeID, s.TaskBindings)
+		delta := s.gm.NodeBindingToSchedulingDelta(taskNodeID, resourceNodeID, s.TaskBindings) // 根据调度结果产生任务调度事件和任务迁移事件
 		if delta != nil {
 			deltas = append(deltas, *delta)
 		}
 	}
 
-	numScheduled := s.applySchedulingDeltas(deltas)
+	numScheduled := s.applySchedulingDeltas(deltas)  // 开始执行调度结果
 
 	// TODO: update_resource_topology_capacities??
 	for rtnd := range s.resourceRoots {
@@ -377,25 +377,25 @@ func (s *scheduler) runSchedulingIteration() (uint64, []pb.SchedulingDelta) {
 func (s *scheduler) applySchedulingDeltas(deltas []pb.SchedulingDelta) uint64 {
 	numScheduled := uint64(0)
 	for _, d := range deltas {
-		td := s.taskMap.FindPtrOrNull(types.TaskID(d.TaskId))
+		td := s.taskMap.FindPtrOrNull(types.TaskID(d.TaskId)) // 任务节点指针
 		if td == nil {
 			panic("")
 		}
 		resID := util.MustResourceIDFromString(d.ResourceId)
-		rs := s.resourceMap.FindPtrOrNull(resID)
+		rs := s.resourceMap.FindPtrOrNull(resID)  // 资源节点指针
 		if rs == nil {
 			panic("")
 		}
 
 		switch d.Type {
-		case pb.SchedulingDelta_PLACE:
+		case pb.SchedulingDelta_PLACE:  // 调度成功事件
 			// log.Printf("TASK PLACEMENT: task:%v on resource:%v\n", td.Uid, rs.Descriptor.FriendlyName)
-			jd := s.jobMap.FindPtrOrNull(util.MustJobIDFromString(td.JobID))
+			jd := s.jobMap.FindPtrOrNull(util.MustJobIDFromString(td.JobID)) // 任务所属的 job
 			if jd.State != pb.JobDescriptor_Running {
-				jd.State = pb.JobDescriptor_Running
+				jd.State = pb.JobDescriptor_Running  // 置 job 为运行态
 			}
 			s.HandleTaskPlacement(td, rs.Descriptor)
-			numScheduled++
+			numScheduled++ // 调度成功数量自增一
 		case pb.SchedulingDelta_PREEMPT:
 			log.Printf("TASK PREEMPTION: task:%v from resource:%v\n", td.Uid, rs.Descriptor.FriendlyName)
 			s.HandleTaskEviction(td, rs.Descriptor)
@@ -412,7 +412,7 @@ func (s *scheduler) applySchedulingDeltas(deltas []pb.SchedulingDelta) uint64 {
 }
 
 func (s *scheduler) updateCostModelResourceStats() {
-	s.gm.ComputeTopologyStatistics(s.gm.SinkNode())
+	s.gm.ComputeTopologyStatistics(s.gm.SinkNode())  // 统计该图所有节点当前正在运行的任务数量
 }
 
 // BindTaskToResource is used to update metadata anytime a task is placed on a some resource by the scheduler
@@ -422,18 +422,18 @@ func (s *scheduler) bindTaskToResource(td *pb.TaskDescriptor, rd *pb.ResourceDes
 	taskID := types.TaskID(td.Uid)
 	rID := util.MustResourceIDFromString(rd.Uuid)
 	// Mark resource as busy and record task binding
-	rd.State = pb.ResourceDescriptor_ResourceBusy
-	rd.CurrentRunningTasks = append(rd.CurrentRunningTasks, uint64(taskID))
+	rd.State = pb.ResourceDescriptor_ResourceBusy  // 更新资源节点的状态为busy
+	rd.CurrentRunningTasks = append(rd.CurrentRunningTasks, uint64(taskID)) // 将该任务添加到该资源节点的正在运行的任务列表中
 	// Insert mapping into task bindings, must not already exist
 	if _, ok := s.TaskBindings[taskID]; ok {
 		log.Panicf("scheduler/bindTaskToResource: mapping for taskID:%v in taskBindings must not already exist\n", taskID)
 	}
-	s.TaskBindings[taskID] = rID
+	s.TaskBindings[taskID] = rID // 更新任务的bindings数组
 	// Update resource bindings, create a binding set if it doesn't exist already
 	if _, ok := s.resourceBindings[rID]; !ok {
 		s.resourceBindings[rID] = make(TaskSet)
 	}
-	s.resourceBindings[rID][taskID] = struct{}{}
+	s.resourceBindings[rID][taskID] = struct{}{}  //更新资源的binding数组
 }
 
 // UnbindTaskFromResource is similar to BindTaskToResource, in that it just updates the metadata for a task being removed from a resource
@@ -469,8 +469,8 @@ func (s *scheduler) unbindTaskFromResource(td *pb.TaskDescriptor, rID types.Reso
 func (s *scheduler) executeTask(td *pb.TaskDescriptor, rd *pb.ResourceDescriptor) {
 	// This function actually executes the task asynchronously on that resource via an executor
 	// but we don't need that
-	td.State = pb.TaskDescriptor_Running
-	td.ScheduledToResource = rd.Uuid
+	td.State = pb.TaskDescriptor_Running // 更新 taskDescriptor 的状态
+	td.ScheduledToResource = rd.Uuid // 更新 taskDescriptor 的调度目标
 }
 
 // InsertTaskIntoRunnables is a helper method used to update the runnable tasks set for the specified job by adding the new task
@@ -496,7 +496,7 @@ func (s *scheduler) computeRunnableTasksForJob(jd *pb.JobDescriptor) TaskSet {
 	// only if their dependencies are fulfilled. We disregards dependencies and
 	// place all tasks that are in the Created or Blocking state into the runnableTasks set
 	jobID := util.MustJobIDFromString(jd.Uuid)
-	rootTask := jd.RootTask
+	rootTask := jd.RootTask  // job有一个rootTask，然后其他的tasks都在该rootTask的子任务列表里
 
 	newlyActiveTasks := queue.NewFIFO()
 	// Only add the root task if it is not already scheduled, running, done
@@ -514,6 +514,7 @@ func (s *scheduler) computeRunnableTasksForJob(jd *pb.JobDescriptor) TaskSet {
 			newlyActiveTasks.Push(childTask)
 		}
 		if currentTask.State == pb.TaskDescriptor_Created || currentTask.State == pb.TaskDescriptor_Blocking {
+			// 只有当任务的任务是 Created' 和 Blocking 时才可以进行调度
 			currentTask.State = pb.TaskDescriptor_Runnable
 			s.insertTaskIntoRunnables(util.MustJobIDFromString(currentTask.JobID), types.TaskID(currentTask.Uid))
 		}
@@ -522,6 +523,7 @@ func (s *scheduler) computeRunnableTasksForJob(jd *pb.JobDescriptor) TaskSet {
 	if runnableTasksForJob, ok := s.runnableTasks[jobID]; ok {
 		return runnableTasksForJob
 	}
+	// 该 job 没有可以运行的 task 时，返回空
 	s.runnableTasks[jobID] = make(TaskSet)
 	return s.runnableTasks[jobID]
 }

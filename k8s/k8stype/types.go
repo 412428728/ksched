@@ -1,7 +1,7 @@
 package k8stype
 
 type Pod struct {
-	ID string
+	ID string // namespace+name
 }
 
 type Node struct {
